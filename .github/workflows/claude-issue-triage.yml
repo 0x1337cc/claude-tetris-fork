@@ -1,0 +1,122 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: claude-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Asegurar labels de prioridad y área
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "priority: high"   --color B60205 --description "Prioridad alta"  --force
+          gh label create "priority: medium" --color FBCA04 --description "Prioridad media" --force
+          gh label create "priority: low"    --color 0E8A16 --description "Prioridad baja"  --force
+          gh label create "area: gameplay"   --color 1D76DB --description "Lógica del juego (piezas, colisiones, líneas)" --force
+          gh label create "area: ui"         --color 5319E7 --description "Render, canvas, HTML/CSS, overlay"             --force
+          gh label create "area: input"      --color C5DEF5 --description "Controles de teclado"                         --force
+          gh label create "area: scoring"    --color F9D0C4 --description "Puntaje, niveles y velocidad"                 --force
+
+      - name: Analizar issue con Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Estás haciendo triage automático de un issue de GitHub en el repositorio
+            ${{ github.repository }} (issue #${{ github.event.issue.number }},
+            evento: ${{ github.event.action }}).
+
+            Este proyecto es un Tetris en JavaScript vanilla + HTML5 Canvas + CSS
+            (sin dependencias ni build step). Lee CLAUDE.md para entender la
+            arquitectura antes de analizar el issue. Toda la lógica del juego vive
+            en game.js; el HTML es index.html y los estilos style.css. Los textos
+            de cara al usuario están en español.
+
+            Pasos a seguir:
+
+            1. Lee el issue completo:
+               `gh issue view ${{ github.event.issue.number }} --json title,body,labels,comments`
+
+            2. Explora el código relevante (game.js, index.html, style.css) con
+               Read/Glob/Grep para entender qué parte del juego describe el issue
+               (piezas y rotación, colisiones, líneas, puntaje/nivel, input de
+               teclado, render en canvas, overlay, etc.).
+
+            3. Clasifica el issue con labels EXISTENTES únicamente (no crees
+               labels nuevos, ya fueron creados por el workflow):
+               - `gh label list` para ver las disponibles.
+               - Exactamente 1 label de tipo: bug, enhancement, documentation,
+                 question o accessibility (usa el que mejor aplique; si el issue
+                 no encaja claramente en ninguno, no fuerces uno).
+               - Exactamente 1 label de prioridad: "priority: high",
+                 "priority: medium" o "priority: low", según impacto y severidad.
+               - Una o más labels de área: "area: gameplay", "area: ui",
+                 "area: input", "area: scoring", según lo que toque el issue.
+               - Aplica los labels con
+                 `gh issue edit ${{ github.event.issue.number }} --add-label "..."`.
+               - Si el evento es "edited", además quita con `--remove-label`
+                 cualquier label de tipo/prioridad/área que ya no aplique según
+                 el contenido actualizado.
+               - NUNCA agregues ni quites "wontfix", "duplicate", "invalid",
+                 "good first issue" ni "help wanted": esas las gestionan personas.
+
+            4. Escribe un diagnóstico general como comentario en el issue, en
+               español, con este formato exacto (incluyendo el marcador HTML al
+               inicio, que se usa para detectar comentarios previos):
+
+               ```
+               <!-- claude-issue-triage -->
+               ## 🔍 Diagnóstico automático
+
+               **Resumen:** (una o dos frases resumiendo el problema/petición)
+
+               **Clasificación:** (labels aplicados y por qué)
+
+               **Análisis:** (causa probable citando archivo:línea y funciones
+               concretas de game.js, p.ej. lockPiece, clearLines, tryRotate,
+               spawn, loop, softDrop, hardDrop, draw, etc. — o la sección de
+               index.html/style.css relevante)
+
+               **Propuesta de solución:** (pasos concretos para implementar el
+               fix o la mejora, mencionando funciones/archivos a tocar)
+
+               **Riesgos / casos borde:** (qué podría romperse o qué validar)
+
+               **Cómo verificar:** (cómo confirmar manualmente que quedó
+               resuelto, ya que el proyecto no tiene tests automatizados)
+
+               **Información faltante:** (si el issue es ambiguo o le falta
+               contexto, pregúntalo aquí; si no falta nada, escribe "Ninguna")
+               ```
+
+            5. Antes de publicar el comentario, revisa si ya existe uno tuyo
+               anterior en este issue buscando el marcador
+               `<!-- claude-issue-triage -->` (por ejemplo con
+               `gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments`).
+               - Si existe, ACTUALÍZALO con
+                 `gh api -X PATCH repos/${{ github.repository }}/issues/comments/<ID> -f body=@archivo.md`
+                 en lugar de crear uno nuevo.
+               - Si no existe, créalo con
+                 `gh issue comment ${{ github.event.issue.number }} --body-file archivo.md`.
+
+            6. No modifiques código ni crees ramas ni pull requests: esta tarea
+               es solo de análisis y clasificación.
+          claude_args: |
+            --allowedTools "Read,Glob,Grep,Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh api:*)"
